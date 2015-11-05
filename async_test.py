@@ -1,19 +1,4 @@
 #!/usr/bin/python3
-#
-# This script parses the dab-enc VLC standard output and
-# extracts ICY info for the mot-encoder.
-#
-# Usage:
-# dab-enc -v <opitons> | mot-icyinfo-vlc.py file.dls file-with-default.dls
-#
-# the file-with-default.dls contains DLS text to be sent when there
-# is no ICY info
-#
-#This script has been written on basis of file from Opendigitalradio/dab-scripts/icy-info.py
-#https://github.com/Opendigitalradio/dab-scripts
-#
-#Author: Piotr Piotrowski
-#Organization: Wroclaw University of Technology
 
 import re
 import asyncio
@@ -22,44 +7,23 @@ import functools
 import signal
 import os
 
-
-DEBUG=1
-
-test_str = u"In: [   -==|==    ]      [0x7f1380004948] access_http access debug: New Title=Pianochocolate - Jean Honeymoon - Bang Bang (Pianochocolate Remix)\nIn: [   -==|==    ]      [0x7f1380004948] access_http access debug: New Title=Pianochocolate - Jean Honeymoon - Bang Bang (Pianochocolate Remix)\nIn: [     -|      ]      [0x7f1380004948] access_http access debug: New Title=Nuclear Cowboys - Nuclear Cowboys - A Morning In The City\nIn: [ -====|====- ]      [0x7f1380004948] access_http access debug: New Title=CloZee - Colossal\nIn: [  ====|====  ]      [0x7f1380004948] access_http access debug: New Title=Steady Hussle - Stick Around\nIn: [ -====|===== ]      [0x7f1380004948] access_http access debug: New Title=Meltin' Kolcha - Reflexions Faites\nIn: [    ==|      ]      [0x7f1380004948] access_http access debug: New Title=Michael Ellis - Half a Million (Tell me what it's like)\nIn: [  ====|====  ]      [0x7f1380004948] access_http access debug: New Title=(null)\nIn: [     =|-     ]      [0x7f1380004948] access_http access debug: New Title=Wasaru - Can we speak\nIn: [!=====|======]      [0x7f1380004948] access_http access debug: New Title=K4MMERER - Sunrise\nIn: [  ====|===   ]      [0x7f1380004948] access_http access debug: New Title=Pianochocolate - Jean Honeymoon - Bang Bang (Pianochocolate Remix)\nIn: [      |      ]      [0x7f1380004948] access_http access debug: New Title=Nuclear Cowboys - Nuclear Cowboys - A Morning In The City\n\n"
-
 def ask_exit(signame):
     print("got signal %s: exit" % signame)
     loop.stop()
 
-def get_from_stdin(loop,re_comp,dls_queue):
+def get_from_stdin(re_comp):
     line=sys.stdin.readline()
     meta_text=re.search(re_comp,line)
     if meta_text:
-        print("Now on-air:")
         print(meta_text.groups()[0])
-        try:
-            dls_queue.get_nowait()              #Empty the queue, new data is comming...
-        except:
-            print("queue was empty")
-        finally:
-            print('Trying to put on queue...')
-            print(dls_queue.full())
-            dls_queue.put_nowait(meta_text.groups()[0])
-            print(dls_queue.full())
-            print("text on queue")
- 
 
 
 
 @asyncio.coroutine         
-def send_dls_text(dls_file,dls_queue):
-    while 1:
+def send_dls_text(loop):
+    while 1: 
         print('DLS sent')
-        print(dls_queue.full())
-        new_text=yield from dls_queue.get()
-        print(new_text)
-        with open(dls_file,'w') as dls_f:
-            dls_f.write(new_text)
+        yield from asyncio.sleep(5)
         
     
              
@@ -78,9 +42,10 @@ if __name__=='__main__':
 
     
     loop=asyncio.get_event_loop()
-    dls_queue=asyncio.Queue(1)
-    loop.add_reader(sys.stdin,functools.partial(get_from_stdin,loop,re_icy,dls_queue))
-    dls_send_task=loop.create_task(send_dls_text(dls_file, dls_queue))
+   
+    loop.add_reader(sys.stdin,functools.partial(get_from_stdin,re_icy))
+    dls_send_task=loop.create_task(send_dls_text(loop))
+    
     
     for signame in ('SIGINT', 'SIGTERM'):
         loop.add_signal_handler(getattr(signal, signame),
@@ -88,9 +53,9 @@ if __name__=='__main__':
 
     print("Event loop running forever, press Ctrl+C to interrupt.")
     print("pid %s: send SIGINT or SIGTERM to exit." % os.getpid())
-    dls_send_task
+
     try:
-        loop.run_until_complete(dls_send_task)
+        loop.run_until_complete(asyncio.wait_for(dls_send_task,None))
     finally:
         print('Going down...')
         loop.close()    
