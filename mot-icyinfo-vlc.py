@@ -31,7 +31,7 @@ def ask_exit(signame):
     print("got signal %s: exit" % signame)
     loop.stop()
 
-def get_from_stdin(loop,re_comp,dls_queue):
+def get_from_stdin(loop,re_comp,dls_queue,vlc_lock):
     line=sys.stdin.readline()
     meta_text=re.search(re_comp,line)
     if meta_text:
@@ -47,6 +47,8 @@ def get_from_stdin(loop,re_comp,dls_queue):
             dls_queue.put_nowait(meta_text.groups()[0])
             print(dls_queue.full())
             print("text on queue")
+            if vlc_lock.locked():
+                vlc_lock.release()
  
 
 
@@ -61,7 +63,30 @@ def send_dls_text(dls_file,dls_queue):
         with open(dls_file,'w') as dls_f:
             dls_f.write(new_text)
         
-    
+@asyncio.coroutine
+def put_default_dls(vlc_lock,dls_queue,dls_file,dls_default_file):
+    if not vlc_lock.locked():
+        yield from vlc_lock.acquire()
+        
+    while 1:
+        yield from asyncio.sleep(30)
+        if vlc_lock.locked():
+            try:
+                dls_queue.get_nowait()              #Empty the queue, new data is comming...
+            except:
+                print("queue was empty")
+            finally:
+                print('Trying to put on queue...')
+                print(dls_queue.full())
+                with open(dls_default_file,'r') as dls_def_f:
+                    default_text=dls_def_f.readline()
+                with open(dls_file,'w') as dls_f:
+                    dls_f.write(default_text)
+                print(dls_queue.full())
+                print("Default text on queue")    
+        else:
+            yield from vlc_lock.acquire()
+            
              
 if __name__=='__main__':
     
@@ -75,12 +100,16 @@ if __name__=='__main__':
 #     meta_text=re.search(re_icy,test_str)
 #     print(meta_text.groups()[0])
     dls_file = sys.argv[1]
-
+    dls_default_file=sys.argv[2]
     
     loop=asyncio.get_event_loop()
+    vlc_lock=asyncio.Lock(loop=loop)
     dls_queue=asyncio.Queue(1)
-    loop.add_reader(sys.stdin,functools.partial(get_from_stdin,loop,re_icy,dls_queue))
-    dls_send_task=loop.create_task(send_dls_text(dls_file, dls_queue))
+    
+    
+    loop.add_reader(sys.stdin,functools.partial(get_from_stdin,loop,re_icy,dls_queue,vlc_lock))
+    
+    
     
     for signame in ('SIGINT', 'SIGTERM'):
         loop.add_signal_handler(getattr(signal, signame),
@@ -88,9 +117,13 @@ if __name__=='__main__':
 
     print("Event loop running forever, press Ctrl+C to interrupt.")
     print("pid %s: send SIGINT or SIGTERM to exit." % os.getpid())
-    dls_send_task
+    
+    dls_send_task=loop.create_task(send_dls_text(dls_file, dls_queue))
+    default_text=loop.create_task(put_default_dls(vlc_lock,dls_queue,dls_file,dls_default_file))
+    tasks=(dls_send_task,default_text)
+    
     try:
-        loop.run_until_complete(dls_send_task)
+        loop.run_until_complete(asyncio.wait(tasks))
     finally:
         print('Going down...')
         loop.close()    
